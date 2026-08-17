@@ -175,6 +175,7 @@ The detailed current setup notes are in:
 
 ```text
 docs/real2sim_current_setup_notes.txt
+docs/EXPERIMENT_RESULTS_20260817.md
 ```
 
 ## Isaac Command Convention
