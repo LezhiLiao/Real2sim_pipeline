@@ -123,6 +123,41 @@ Apply it as:
 world_T_align_real_base_new = delta_sim_to_real_world @ world_T_align_real_base_init
 ```
 
+## Gripper Finetune
+
+Do not run unconstrained 6DoF ICP on near/gripper points. The near gripper point clouds are internally stable within real and sim sets, but sim-vs-real free ICP can drift because the geometry is local, partly symmetric, and RealSense near-depth noise changes point density.
+
+Recommended flow:
+
+1. Use near points in camera optical frame: `0.05m <= z < 0.20m`.
+2. Compute robust centers for real and sim with MAD filtering or 10%-90% trimmed mean.
+3. Use `delta_camera = real_center - sim_center` as a diagnostic.
+4. If testing gripper mount changes, constrain the edit to one fixed-joint degree/axis.
+5. Re-render sim target point clouds and inspect real/sim near overlays.
+
+Current Robotiq mount structure:
+
+```text
+robot_gripper_joint
+  body0 = /Root/ur5e/ur5e/wrist_3_link
+  body1 = /Root/Robotiq_2F_85_edit/Robotiq_2F_85_edit/Robotiq_2F_85/base_link
+```
+
+`localPos0` is the joint frame in wrist_3_link coordinates. `localPos1` is the joint frame in Robotiq base_link coordinates. To change relative mount position, edit one side only. Do not move `wrist_3_link` itself, because the wrist camera is attached to it.
+
+Current tested USD state:
+
+```text
+physics:localPos0 = (0, 0, 0.02)
+physics:localPos1 = (0, 0, 0)
+```
+
++2cm output:
+
+```text
+/tmp/isaacsim6_outputs/sim_icp_target_pointclouds_gripper_joint_localpos0_plus2cm_only_20260817
+```
+
 ## Tools
 
 ```text

@@ -55,3 +55,45 @@ For future calibration datasets, do not use complex cluttered background. Captur
 - Low-reflection, non-transparent surfaces.
 
 This gives ICP real 3D constraints without making RealSense depth noise dominate.
+
+## Gripper Near-Point Finetune
+
+For gripper refinement, do not use free 6DoF ICP on `near/gripper` clouds. It gives low RMSE but unstable, physically meaningless deltas.
+
+Use robust center diagnostics in camera optical frame:
+
+```text
+near points: 0.05m <= camera_z < 0.20m
+delta_camera = real_center - sim_center
+```
+
+Current original MAD-filtered center delta:
+
+```text
+[-0.0074827425, 0.0007986906, 0.0202399533] m
+```
+
+The gripper is connected by a fixed joint, not as a direct child of `wrist_3_link`:
+
+```text
+robot_gripper_joint
+  body0 = wrist_3_link
+  body1 = Robotiq base_link
+```
+
+Joint frame semantics:
+
+```text
+localPos0/localRot0: joint frame in wrist_3_link coordinates
+localPos1/localRot1: joint frame in Robotiq base_link coordinates
+world_T_wrist3 @ localFrame0 == world_T_gripper_base @ localFrame1
+```
+
+Current +2cm test edits only one side:
+
+```text
+localPos0 = (0, 0, 0.02)
+localPos1 = (0, 0, 0)
+```
+
+Do not move `wrist_3_link`; the wrist camera is mounted there. Do not move only visual meshes, because that can desynchronize visual and collision geometry.

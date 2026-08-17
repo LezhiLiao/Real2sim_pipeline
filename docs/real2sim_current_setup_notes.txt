@@ -527,6 +527,135 @@ Current selected-frame result written to the cube pick-place script:
     translation = (-0.6062680991476823, -0.7083919554004651, 0.1128684852177913)
     quat_wxyz   = (0.9993668817805874, -0.02892215679558249, 0.015075419773920105, -0.01421534962909488)
 
+9.5 Gripper near-point finetune procedure
+
+The gripper/near-point refinement must not use unconstrained 6DoF ICP. The current evidence is:
+
+- Per-frame 6DoF ICP on near/gripper points gives low RMSE but very inconsistent deltas.
+- Real near-point clouds are internally stable across frames.
+- Sim near-point clouds are also internally stable across frames.
+- Therefore the problem is mostly a stable sim-vs-real gripper geometry/mount offset plus RealSense near-depth artifacts, not random per-frame gripper motion.
+
+Near point definition:
+
+  camera optical z in [0.05 m, 0.20 m)
+
+Internal consistency measured in camera optical frame:
+
+  real set:
+    centroid pairwise mean ~= 1.53 mm
+    pairwise ICP translation mean ~= 0.62 mm
+    pairwise ICP rotation mean ~= 0.33 deg
+    pairwise ICP rmse mean ~= 1.04 mm
+
+  sim set:
+    centroid pairwise mean ~= 0.20 mm
+    pairwise ICP translation mean ~= 0.11 mm
+    pairwise ICP rotation mean ~= 0.10 deg
+    pairwise ICP rmse mean ~= 0.13 mm
+
+Recommended estimator:
+
+1. Work in camera optical frame, not world frame, for gripper near-point center diagnostics.
+2. Compute robust centers for real and sim near clouds per frame.
+3. Use MAD-filtered mean or 10%-90% trimmed mean, not raw mean.
+4. Use:
+
+   delta_camera = real_center - sim_center
+
+   This is the offset to add to sim near points if aligning only by robust center.
+
+Original robust center delta before gripper mount adjustment:
+
+  MAD-filtered mean, real - sim, camera optical frame:
+    (-0.0074827425, 0.0007986906, 0.0202399533) m
+
+  In millimeters:
+    (-7.48, 0.80, 20.24) mm
+
+Important: this camera-frame xyz delta is diagnostic. Do not directly write all xyz into the gripper unless a full mount model is intentionally being changed. For the current experiment, constrain the change to the fixed joint mount offset.
+
+Gripper mounting structure:
+
+  /Root/ur5e/ur5e/joints/robot_gripper_joint
+    body0 -> /Root/ur5e/ur5e/wrist_3_link
+    body1 -> /Root/Robotiq_2F_85_edit/Robotiq_2F_85_edit/Robotiq_2F_85/base_link
+
+The gripper is not simply a child prim under wrist_3_link. It is a separate Robotiq asset connected to wrist_3_link by a PhysicsFixedJoint.
+
+Joint frame semantics:
+
+  localPos0/localRot0 = joint frame expressed in body0, wrist_3_link local coordinates
+  localPos1/localRot1 = joint frame expressed in body1, Robotiq base_link local coordinates
+
+Fixed joint constraint:
+
+  world_T_wrist3 @ localFrame0 == world_T_gripper_base @ localFrame1
+
+Therefore:
+
+- Do not move wrist_3_link itself; the wrist camera is attached to wrist_3_link and must not move.
+- Do not move only visual meshes; that risks visual/collision mismatch.
+- Do not set localPos0 and localPos1 to the same offset; that mostly cancels the relative mount change.
+- To test a gripper mount z offset, change one side of the fixed joint only.
+
+Current tested mount edits:
+
+1. Invalid/ineffective test:
+
+   localPos0 = (0, 0, 0.01)
+   localPos1 = (0, 0, 0.01)
+
+   This produced almost no near-point center change because both joint frames moved together.
+
+2. Single-sided +1 cm test:
+
+   localPos0 = (0, 0, 0.01)
+   localPos1 = (0, 0, 0)
+
+   Output:
+     /tmp/isaacsim6_outputs/sim_icp_target_pointclouds_gripper_joint_localpos0_plus1cm_only_20260817
+
+   Robust center residual, real - sim, camera optical frame:
+     (-0.0071555881, 0.0020717043, 0.0189977751) m
+
+3. Current single-sided +2 cm test:
+
+   localPos0 = (0, 0, 0.02)
+   localPos1 = (0, 0, 0)
+
+   Output:
+     /tmp/isaacsim6_outputs/sim_icp_target_pointclouds_gripper_joint_localpos0_plus2cm_only_20260817
+
+   Robust center residual, real - sim, camera optical frame:
+     (-0.0060103693, 0.0034230505, 0.0157480545) m
+
+   Near overlay:
+     /tmp/isaacsim6_outputs/sim_icp_target_pointclouds_gripper_joint_localpos0_plus2cm_only_20260817/near_real_sim_overlay_and_stats/all_samples_near_real_sim_camera_overlay_contact_sheet.png
+
+Current robot USD state as of 2026-08-17:
+
+  /data/user/isaacsim6/assets/ur5e_robotiq_2f85_fixed_camera_gripper_camera_rz90_wrist3_handeye_optical_down_camera.usda
+
+  robot_gripper_joint:
+    point3f physics:localPos0 = (0, 0, 0.02)
+    point3f physics:localPos1 = (0, 0, 0)
+    quatf   physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
+    quatf   physics:localRot1 = (1, 0, 0, 0)
+
+Backups for these gripper tests:
+
+  /data/user/isaacsim6/assets/ur5e_robotiq_2f85_fixed_camera_gripper_camera_rz90_wrist3_handeye_optical_down_camera.usda.bak_before_gripper_z_plus_1cm_20260817
+  /data/user/isaacsim6/assets/ur5e_robotiq_2f85_fixed_camera_gripper_camera_rz90_wrist3_handeye_optical_down_camera.usda.bak_before_gripper_joint_localpos0_plus1cm_only_20260817
+  /data/user/isaacsim6/assets/ur5e_robotiq_2f85_fixed_camera_gripper_camera_rz90_wrist3_handeye_optical_down_camera.usda.bak_before_gripper_joint_localpos0_plus2cm_only_20260817
+
+Recommended next step:
+
+- Compare the +2 cm overlay visually against real near points.
+- If continuing, change only localPos0 by small increments and re-render target point clouds.
+- Keep using robust center residual and overlay images as the main diagnostic.
+- Avoid unconstrained 6DoF near-point ICP for deciding gripper mount corrections.
+
 10. Full Build-From-Zero Procedure
 ----------------------------------
 
@@ -699,6 +828,13 @@ If peg-in-hole should use the same real-base-aligned robot orientation, update i
    - The visible background is from aligned 3DGS.
    - Collision planes used for physics do not automatically appear as camera-visible point clouds unless rendered geometry exists.
    - If the table is only a collision plane and not visible geometry, it will not contribute normal RGB/depth appearance the same way as the 3DGS/table visual asset.
+
+6. Near/gripper 6DoF ICP looks good by RMSE but gives nonsense deltas:
+   - This is expected for local, symmetric, partially occluded gripper geometry.
+   - Use robust center diagnostics in camera frame instead.
+   - If changing gripper mount, use the PhysicsFixedJoint relationship and change one joint frame only.
+   - Do not move wrist_3_link because the wrist camera is attached to it.
+   - Do not move only visual meshes unless collision mismatch is intentionally accepted.
 
 13. Current Backups
 -------------------
