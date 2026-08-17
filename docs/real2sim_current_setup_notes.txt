@@ -1,0 +1,744 @@
+Real2Sim Current Setup Notes
+============================
+
+Last updated: 2026-08-17
+Workspace: /data/user/isaacsim6/Project/icp_verify
+
+This file records the current real2sim setup for the UR5e + Robotiq + wrist D405 pipeline. It is intended to be detailed enough for rebuilding the project from zero, and also to prevent future confusion about camera frames, robot base frames, ArUco/world alignment, 3DGS assets, and ICP refinement.
+
+0. Current High-Level State
+---------------------------
+
+The current setup has two separate real2sim alignment layers:
+
+1. World / scene alignment:
+   - The ArUco marker defines the global world frame.
+   - The 3DGS background scene is aligned into this ArUco/world frame.
+   - The robot base pose in world is initially estimated from real robot-to-ArUco calibration.
+
+2. Robot model frame alignment:
+   - Real UR controller base frame and Isaac robot asset base_link frame are not identical.
+   - A diagnostic using real recorded joints and real base_T_tcp showed that Isaac FK from recorded joints is approximately the real TCP pose after a fixed Z-axis 180 degree base-frame rotation.
+   - Therefore, for sim target point cloud generation, use:
+
+     world_T_isaac_base_link = world_T_align_real_base_frame @ align_real_base_frame_T_isaac_base_link
+
+   - Here align_real_base_frame means the real UR robot base frame used by real robot data.
+   - align_real_base_frame_T_isaac_base_link is a fixed Rz(180deg):
+
+     [ -1  0  0  0 ]
+     [  0 -1  0  0 ]
+     [  0  0  1  0 ]
+     [  0  0  0  1 ]
+
+   - Quaternion wxyz for this fixed rotation is:
+
+     (0.0, 0.0, 0.0, 1.0)
+
+Important current status:
+
+- The wrist camera USD extrinsic is already written into the robot USD asset and will be used by any script that loads this USD and clones wrist_3_link/realsense.
+- The align_real_base_frame base correction is implemented in the ICP target generation script.
+- The cube pick-place collection script has also been updated so DESIRED_BASE_POSES is interpreted as world_T_align_real_base_frame and the inserted Isaac base_link receives the composed Rz(180deg) pose.
+- The latest cube script base pose additionally includes the selected-frame shared background ICP sim->real correction from 2026-08-17.
+- Therefore, at this moment:
+  - Wrist camera extrinsic: shared through the USD asset.
+  - Robot base Rz(180) correction: active in target point cloud generation and cube pick-place collection.
+  - Peg/three-camera scripts must still be checked individually before assuming their robot base pose has the same ICP-refined value.
+
+1. Important Asset and Script Paths
+-----------------------------------
+
+Main workspace:
+
+  /data/user/isaacsim6/Project/icp_verify
+
+Robot USD currently used for direct wrist camera:
+
+  /data/user/isaacsim6/assets/ur5e_robotiq_2f85_fixed_camera_gripper_camera_rz90_wrist3_handeye_optical_down_camera.usda
+
+Background / scene USD used by the current target point cloud script:
+
+  /data/user/isaacsim6/assets/810_data/usd-result/embody_tag.usda
+
+Cube pick-place collection script:
+
+  /data/user/isaacsim6/outputs/baselines/broken_precreated_peg_attempt_20260709/scense_collect_cube_pick_place_embody_tag.py
+
+Peg-in-hole / three-camera collection script actually found on disk:
+
+  /data/user/isaacsim6/outputs/baselines/broken_precreated_peg_attempt_20260709/scense_collect_fix_grip_random_hole_in_2cm_range_align_real_three_cam_wrist3_handeye_optical_down.py
+
+Note: the user sometimes wrote `scene_collect_fix...py`, but the file currently present on disk is `scense_collect_fix...py`.
+
+Current ICP / target helper scripts in this workspace:
+
+  /data/user/isaacsim6/Project/icp_verify/collect_sim_target_pointclouds.py
+  /data/user/isaacsim6/Project/icp_verify/icp_refine_robot_world_pose.py
+  /data/user/isaacsim6/Project/icp_verify/icp_refine_robot_world_pose_per_frame.py
+  /data/user/isaacsim6/Project/icp_verify/check_real_tcp_ik_vs_joints.py
+  /data/user/isaacsim6/Project/icp_verify/capture_initial_tcp_pose_png.py
+
+Real ICP sample data currently used:
+
+  /data/user/isaacsim6/Project/icp_verify/data/icp_run_20260814_155745
+
+Latest validated sim target output using direct wrist_3_link camera, Isaac -Z camera convention, and align_real_base_frame base correction:
+
+  /tmp/isaacsim6_outputs/sim_icp_target_pointclouds_align_base_isaac_zminus_handeye_20260816
+
+Inside that directory:
+
+  sample_000000/rgb_sim.png
+  sample_000000/pointcloud_camera_sim.npz
+  sample_000000/pointcloud_world_sim.npz
+  sample_000000/pointcloud_world_sim.ply
+  ...
+  sample_000010/rgb_sim.png
+  sim_target_world_merged.npz
+  sim_target_world_merged.ply
+  sim_target_metadata.json
+
+2. Coordinate Frames
+--------------------
+
+2.1 world / ArUco frame
+
+- The global simulation and reconstruction world frame is defined by the ArUco marker.
+- All scene assets, robot placement, and point clouds should ultimately be expressed in this frame.
+- In scripts and generated files this is often called world or USD/ArUco world.
+
+2.2 align_real_base_frame
+
+- This is the real UR robot base frame.
+- Real robot metadata values such as base_T_tcp should be interpreted as:
+
+  align_real_base_frame_T_tcp
+
+- The name align_real_base_frame was introduced to make the real UR base explicit and reusable.
+- It is not currently a physical robot asset frame inside the robot USD.
+- Recommended chain:
+
+  world / ArUco
+    -> align_real_base_frame
+    -> isaac_base_link
+    -> wrist_3_link
+    -> wrist_3_link/realsense
+
+2.3 isaac_base_link
+
+- This is the base_link frame inside the Isaac UR5e robot asset.
+- Robot asset base path suffix:
+
+  /ur5e/ur5e/base_link
+
+- It is not the same convention as the real UR base frame.
+- Verified relationship for target point cloud generation:
+
+  align_real_base_frame_T_isaac_base_link = Rz(180deg)
+
+2.4 wrist_3_link
+
+- The wrist camera must be attached directly under wrist_3_link.
+- The camera is NOT attached to ft_frame.
+- The camera is NOT using an rsd455.usd payload color camera internal transform.
+
+Correct camera prim inside the robot asset:
+
+  /Root/ur5e/ur5e/wrist_3_link/realsense
+
+Runtime clone path after create_wrist_camera:
+
+  /World/InsertedRobots/UR5e_1/ur5e/ur5e/wrist_3_link/CodexWristCamera
+
+2.5 Camera optical frame conventions
+
+There are two camera coordinate conventions to keep separate:
+
+A. RealSense / OpenCV optical point cloud frame:
+
+  +X right
+  +Y down
+  +Z forward
+
+B. Isaac / USD Camera prim convention:
+
+  The camera looks along its local -Z axis.
+
+When writing hand-eye extrinsics into the USD Camera prim, do not directly write an OpenCV optical rotation as a USD Camera rotation. Convert the hand-eye rotation to the Isaac Camera -Z convention first.
+
+In the current target generation script, pointcloud_camera_sim is saved in RealSense optical convention, while pointcloud_world_sim is saved in USD/ArUco world coordinates.
+
+3. Current Wrist Camera Mount
+-----------------------------
+
+Correct mounting rule:
+
+  wrist camera directly under wrist_3_link
+  do not use ft_frame
+  do not use rsd455.usd payload color camera internal transform
+
+Correct chain:
+
+  /Root/ur5e/ur5e/wrist_3_link/realsense Camera
+
+Incorrect chain:
+
+  /Root/ur5e/ur5e/wrist_3_link/ft_frame/realsense
+
+The collection scripts should call:
+
+  wrist_camera_path = create_wrist_camera(stage, wrist_link_path, debug_path)
+
+not:
+
+  wrist_camera_path = create_wrist_camera(stage, wrist_frame_path, debug_path)
+
+create_wrist_camera searches for the asset camera at wrist_3_link/realsense, then clones it to:
+
+  wrist_3_link/CodexWristCamera
+
+and copies the source camera world pose.
+
+4. Current Wrist Camera Intrinsics
+----------------------------------
+
+The scripts force D405-like intrinsics. Values seen in current code/notes are very close but not perfectly identical across notes. The current target point cloud script uses:
+
+  fx = 394.0833740234375
+  fy = 393.5317077636719
+  cx = 318.42926025390625
+  cy = 235.58648681640625
+  width  = 640
+  height = 480
+
+The user's camera note recorded:
+
+  fx = 394.0833740234375
+  fy = 393.5317077636719
+  cx = 318.426025390625
+  cy = 235.50848388671875
+  image_size = 640 x 480
+  distortion = 0
+
+Real captured metadata sample_000001 records:
+
+  fx = 394.0833740234375
+  fy = 393.5317077636719
+  cx = 318.42926025390625
+  cy = 235.58648681640625
+  distortion_model = inverse_brown_conrady
+  depth_scale_m_per_unit ~= 1e-4
+
+For sim rendering, distortion is treated as zero.
+
+5. Current Wrist Camera Extrinsic Written in USD
+------------------------------------------------
+
+User-provided hand-eye 4x4 matrix:
+
+  [  0.9976653405   -0.009330144963   0.0676521745   -0.01836250805 ]
+  [ -0.02127699195   0.8988521473     0.4377352018   -0.0800952162  ]
+  [ -0.06489343521  -0.4381526739     0.8965551162    0.07073644041 ]
+  [  0                0                0               1             ]
+
+Important: this rotation was converted to Isaac Camera -Z convention before writing to the USD Camera prim. The conversion used for the current validated target set is:
+
+  R_usd = R_handeye @ diag(1, -1, -1)
+
+The current USD values written into /Root/ur5e/ur5e/wrist_3_link/realsense are:
+
+  double3 xformOp:translate = (-0.01836250805, -0.0800952162, 0.07073644041)
+  quatd   xformOp:orient    = (0.224865558167888, 0.973790609428513, -0.00306709852999847, -0.034028262448983)
+
+Quaternion order is USD / Isaac wxyz.
+
+Do not confuse this with the direct OpenCV/ordinary-rotation quaternion for the raw 3x3, which would be different and was shown to produce bad target renders with many zero-depth frames.
+
+6. Real Data Format
+-------------------
+
+Real sample directory example:
+
+  /data/user/isaacsim6/Project/icp_verify/data/icp_run_20260814_155745/sample_000001
+
+Important files:
+
+  rgb.png
+  depth_raw_uint16.png
+  depth_m.npy
+  depth_color_preview.png
+  pointcloud_camera.ply
+  pointcloud_camera.npz
+  base_T_tcp.npy
+  metadata.json
+
+metadata.json contains:
+
+  robot.joint_position_rad
+  robot.joint_position_deg
+  robot.tcp_pose_xyz_rotvec_m_rad
+  robot.base_T_tcp
+  camera_intrinsics
+  pointcloud metadata
+
+Current assumption for target rendering:
+
+  robot.joint_position_rad is in UR joint order:
+    shoulder_pan
+    shoulder_lift
+    elbow
+    wrist_1
+    wrist_2
+    wrist_3
+
+The metadata does not explicitly store joint names, so the order must be guaranteed by the real data collection script.
+
+Current assumption for real point cloud transform:
+
+  base_T_tcp.npy means align_real_base_frame_T_tcp.
+
+If base_T_tcp is active UR TCP rather than wrist_3_link, then ICP code must use the matching tcp_T_camera hand-eye. Do not silently treat active TCP as wrist_3_link unless that is confirmed.
+
+7. Robot Base Alignment Diagnostic
+----------------------------------
+
+Diagnostic script:
+
+  /data/user/isaacsim6/Project/icp_verify/check_real_tcp_ik_vs_joints.py
+
+Purpose:
+
+1. Read real metadata robot.joint_position_rad.
+2. Set those joints directly into Isaac UR5e.
+3. Read Isaac wrist_3_link FK in Isaac base_link frame.
+4. Compare it with real base_T_tcp.
+5. Also solve IK from real base_T_tcp and compare solved joints with recorded joints.
+
+Result from all 11 frames:
+
+- Without base correction, recorded-joint FK vs real base_T_tcp had roughly:
+
+  position error: 0.6 m to 1.2 m
+  rotation error: about 180 deg
+
+- After applying Rz(180deg) to the Isaac FK base coordinates:
+
+  mean position residual ~= 0.94 mm
+  max  position residual ~= 4.91 mm
+
+Conclusion:
+
+  real UR base frame and Isaac base_link differ by a fixed Z-axis 180 degree rotation.
+
+Therefore target rendering should use:
+
+  world_T_isaac_base_link = world_T_align_real_base_frame @ Rz(180deg)
+
+8. Current Target Point Cloud Generation
+----------------------------------------
+
+Script:
+
+  /data/user/isaacsim6/Project/icp_verify/collect_sim_target_pointclouds.py
+
+This script reuses the cube scene builder so that scene layout, robot USD, robot base pose, and wrist camera mount match the collection environment. It does not run pick/place trajectory and does not spawn the cube for ICP target generation. For each real sample it:
+
+1. Loads the collection script as a module.
+2. Applies align_real_base_frame base correction unless disabled:
+
+   align_real_base_frame_T_isaac_base_link = Rz(180deg)
+
+3. Builds the Isaac scene.
+4. Reads real sample joint_position_rad.
+5. Sets the simulated UR5e arm joints to those recorded real joint values.
+6. Closes the gripper with command 1.0.
+7. Renders wrist RGB and depth.
+8. Back-projects depth into RealSense optical frame.
+9. Saves per-frame camera/world point clouds and RGB PNG.
+10. Merges all target world point clouds into a downsampled PLY.
+
+Important default parameters:
+
+  real-run-dir: data/icp_run_20260814_155745
+  scene-usd: /data/user/isaacsim6/assets/810_data/usd-result/embody_tag.usda
+  robot-usd: collection script default, which points to the direct wrist camera robot USD
+  width: 640
+  height: 480
+  renderer: RayTracedLighting
+  warmup-steps: 72
+  settle-steps: 8
+  capture-updates: 3
+  min-depth: 0.05 m
+  max-depth: 1.0 m
+  gripper-command: 1.0
+  merged-voxel: 0.004 m
+
+Latest command used:
+
+  env -u PYTHONPATH -u LD_LIBRARY_PATH -u CARB_APP_PATH -u EXP_PATH -u ISAAC_PATH \
+      -u CONDA_PREFIX -u CONDA_DEFAULT_ENV -u CONDA_PROMPT_MODIFIER \
+      TMPDIR=/tmp/isaacsim6_tmp \
+      /tmp/isaacsim6_clean_local/python.sh \
+      /data/user/isaacsim6/Project/icp_verify/collect_sim_target_pointclouds.py \
+        --real-run-dir /data/user/isaacsim6/Project/icp_verify/data/icp_run_20260814_155745 \
+        --output-dir /tmp/isaacsim6_outputs/sim_icp_target_pointclouds_align_base_isaac_zminus_handeye_20260816 \
+        --save-per-sample-ply \
+        --gripper-command 1.0
+
+Latest validated output:
+
+  /tmp/isaacsim6_outputs/sim_icp_target_pointclouds_align_base_isaac_zminus_handeye_20260816
+
+Point counts in latest validated run:
+
+  sample_000000: 215221
+  sample_000001: 114692
+  sample_000002: 102180
+  sample_000003: 189946
+  sample_000004: 131685
+  sample_000005: 159488
+  sample_000006: 128758
+  sample_000007: 153914
+  sample_000008: 224243
+  sample_000009: 261363
+  sample_000010: 307173
+  merged_points_after_voxel: 634893
+
+9. ICP Refinement Plan
+----------------------
+
+The goal of ICP is not to redefine the whole coordinate system. The goal is to refine the residual small pose error after ArUco/world alignment and robot base rough alignment.
+
+Recommended ICP stages:
+
+9.1 Robot/world base refinement
+
+Inputs:
+
+- Real point clouds from wrist camera:
+
+  sample_*/pointcloud_camera.npz
+
+- Real FK / TCP pose:
+
+  sample_*/base_T_tcp.npy
+
+- Wrist/hand-eye calibration:
+
+  tcp_T_camera or wrist3_T_camera, depending on the exact frame in base_T_tcp.
+
+- Sim target point clouds:
+
+  sample_*/pointcloud_world_sim.npz
+
+Transform real source points:
+
+  p_world_real = world_T_align_real_base_frame @ align_real_base_frame_T_tcp @ tcp_T_camera @ p_camera
+
+Transform sim target points are already saved as:
+
+  p_world_sim
+
+Estimate a small shared delta_world with all frames:
+
+  world_T_align_real_base_frame_refined = delta_world @ world_T_align_real_base_frame_initial
+
+Use per-frame shared-delta ICP rather than merging all real frames into one huge cloud too early. Each real frame should match the corresponding sim target frame, while optimizing one shared delta.
+
+9.2 Gripper refinement
+
+After base refinement is reasonable, fix the gripper state and collect point clouds where the gripper is visible and consistent.
+
+Recommended gripper state for current dataset:
+
+  gripper-command = 1.0
+
+Then estimate small corrections for the gripper geometry or wrist camera/gripper relationship if needed. Do not let gripper/camera extrinsic errors dominate the base ICP.
+
+9.3 Foreground object refinement
+
+Peg, hole, cube, and other objects should be reconstructed or modeled separately and then placed in world/ArUco frame. Use their own visual and collision assets. Do not rely on the background 3DGS to provide accurate collision geometry for small manipulated objects.
+
+9.4 Current recommended background ICP procedure
+
+The latest successful direction is to keep per-frame pairing and optimize one shared global delta using only selected low-noise background frames. Do not let gripper/near points and noisy complex background participate in the same ICP objective.
+
+Critical rules:
+
+1. Separate background and gripper/near points before ICP.
+
+   - Background points: camera optical z >= 0.20 m.
+   - Gripper/near points: camera optical z < 0.20 m.
+   - Background ICP is for refining world_T_align_real_base_frame.
+   - Gripper ICP, if used, must be a separate stage with tighter constraints.
+   - Do not mix gripper, robot fingers, cube, and far background into one unconstrained 6DoF ICP. The close gripper has high leverage and can make the base correction reflect hand-eye or gripper mount error instead of world/base error.
+
+2. Background capture must prefer low-noise geometric primitives.
+
+   - Use a clean tabletop and visible table edges.
+   - A large plane alone is under-constrained; include one or more clear edges or right-angle structures.
+   - Avoid complex background clutter, reflective surfaces, thin objects, transparent objects, and far noisy RealSense depth.
+   - RealSense depth noise in complex scenes can dominate nearest-neighbor ICP and produce plausible low RMSE but wrong global transforms.
+
+3. Visualize before optimizing.
+
+   - First compare real rgb.png and sim rgb_sim.png for each frame.
+   - Then render real/sim background point clouds in the same world-scale overlay.
+   - Only select frames whose RGB and point cloud overlays agree qualitatively.
+   - The current useful frame set from the 2026-08-14 run is:
+
+     sample_000010, sample_000009, sample_000008, sample_000006, sample_000000
+
+4. Use shared-delta per-frame ICP for selected frames.
+
+   - Keep real frame i paired with sim frame i.
+   - For each frame, compute correspondences only against that frame's sim target.
+   - Optimize one shared delta across all selected frames.
+   - The direct ICP estimate maps real/source to sim/target; for correcting sim robot placement to the real domain, apply the inverse sim->real delta.
+
+5. Apply delta in world frame by left multiplication.
+
+   Correct update:
+
+     world_T_align_real_base_new = delta_sim_to_real_world @ world_T_align_real_base_init
+
+   Do not just add xyz translation unless intentionally doing a rough approximation. Do not stack a new delta on a previously refined pose unless the target/split point clouds were generated from that same previously refined pose.
+
+Current selected-frame result written to the cube pick-place script:
+
+  selected frames:
+    sample_000010, sample_000009, sample_000008, sample_000006, sample_000000
+
+  ICP output directory:
+    /tmp/isaacsim6_outputs/icp_background_shared_delta_selected_frames_10_9_8_6_0_20260817
+
+  delta_sim_to_real_translation_m:
+    (0.051514468014859295, -0.10083043438638568, 0.02551565264491571)
+
+  delta_sim_to_real_quat_xyzw:
+    (-0.026284795973907347, -0.019649837311149106, -0.021545205017915146, 0.9992291016253437)
+
+  rmse:
+    0.011436 m
+
+  Applied base pose in cube pick-place script, quaternion wxyz:
+
+    translation = (-0.6062680991476823, -0.7083919554004651, 0.1128684852177913)
+    quat_wxyz   = (0.9993668817805874, -0.02892215679558249, 0.015075419773920105, -0.01421534962909488)
+
+10. Full Build-From-Zero Procedure
+----------------------------------
+
+A. Coordinate unification
+
+1. Place an ArUco marker in the physical scene.
+2. Define the ArUco frame as the global world frame.
+3. Estimate camera_T_aruco or aruco_T_camera from camera images using calibrated intrinsics.
+4. Convert all observations into world/ArUco frame.
+5. Calibrate the real UR robot base relative to the ArUco/world frame:
+
+   world_T_align_real_base_frame
+
+6. Keep align_real_base_frame as the real robot base frame used by UR controller data.
+7. For Isaac robot placement, compose:
+
+   world_T_isaac_base_link = world_T_align_real_base_frame @ Rz(180deg)
+
+B. Background reconstruction
+
+1. Remove robot, gripper, peg, cube, hole, and other foreground objects from the background scan.
+2. Capture the static scene with calibrated cameras.
+3. Reconstruct the background with 3DGS.
+4. Align the 3DGS reconstruction to the ArUco/world frame.
+5. The user referenced this approach as useful:
+
+   https://github.com/LezhiLiao/apriltag-3dgs-align
+
+   The intended idea is to use detected tag poses/corners as metric anchors, solve the transform from the Gaussian reconstruction to the marker/world frame, and export the aligned scene asset.
+
+6. Export/import the aligned 3DGS background as a USD scene asset. Current scene asset:
+
+   /data/user/isaacsim6/assets/810_data/usd-result/embody_tag.usda
+
+C. Camera calibration
+
+1. Read real camera intrinsics from RealSense metadata or calibration files.
+2. For fixed cameras, estimate world_T_camera or camera_T_world using ArUco and known world geometry.
+3. For wrist camera, estimate the hand-eye relation between the robot wrist/TCP frame and the camera optical frame.
+4. Convert the hand-eye rotation to Isaac Camera -Z convention before writing the USD Camera prim.
+5. Write only these two lines in the direct camera USD prim when replacing hand-eye:
+
+   quatd xformOp:orient = (...)
+   double3 xformOp:translate = (...)
+
+6. Do not use ft_frame for wrist camera mounting.
+7. Do not use rsd455.usd payload internal color camera transform.
+
+D. Robot establishment
+
+1. Calibrate the real robot base relative to ArUco/world:
+
+   world_T_align_real_base_frame
+
+2. In Isaac, insert the UR5e robot asset.
+3. Apply the fixed base-frame correction:
+
+   align_real_base_frame_T_isaac_base_link = Rz(180deg)
+
+4. Set the Isaac robot base pose:
+
+   world_T_isaac_base_link = world_T_align_real_base_frame @ align_real_base_frame_T_isaac_base_link
+
+5. Use the direct wrist camera robot USD:
+
+   /data/user/isaacsim6/assets/ur5e_robotiq_2f85_fixed_camera_gripper_camera_rz90_wrist3_handeye_optical_down_camera.usda
+
+E. Remove foreground / robot and capture real/sim point clouds for ICP
+
+1. Capture real data from the wrist camera:
+
+   rgb.png
+   depth_m.npy
+   pointcloud_camera.npz
+   metadata.json
+   base_T_tcp.npy
+
+2. In sim, build the same scene layout.
+3. Set the sim robot arm joints using real metadata robot.joint_position_rad.
+4. Use closed gripper if the real frame has closed gripper or if the target is for closed-gripper ICP:
+
+   gripper-command = 1.0
+
+5. Render sim wrist RGB and depth.
+6. Save per-frame RGB and point cloud.
+7. Confirm RGB content matches the real camera content before running ICP.
+8. Run per-frame shared-delta ICP to refine world_T_align_real_base_frame.
+
+F. Fixed-gripper point cloud refinement
+
+1. Lock the gripper state to a known command, currently 1.0.
+2. Capture multiple real frames with different arm angles.
+3. Capture corresponding sim frames using the same recorded joints.
+4. Exclude the cube when estimating robot/gripper alignment if the cube state is uncertain.
+5. Keep robot arm, gripper, table/background when they are useful and correctly modeled.
+6. Run shared-delta ICP or a gripper-specific refinement stage.
+
+G. Foreground reconstruction
+
+1. Reconstruct Peg, Hole, Cube, and task objects separately from the background.
+2. Generate visual assets for rendering and collision assets for physics.
+3. Place these foreground assets into the world/ArUco frame.
+4. Verify geometry scale and collision alignment independently from the background 3DGS.
+5. For manipulation tasks, collision geometry should be simple, stable, and physically meaningful. Do not use raw visual 3DGS directly as collision.
+
+11. Script Synchronization Rules
+--------------------------------
+
+Wrist camera extrinsic synchronization:
+
+- Any script that loads this robot USD and uses create_wrist_camera(stage, wrist_link_path, debug_path) will get the current wrist camera extrinsic:
+
+  /data/user/isaacsim6/assets/ur5e_robotiq_2f85_fixed_camera_gripper_camera_rz90_wrist3_handeye_optical_down_camera.usda
+
+- This includes scripts using:
+
+  wrist_3_link/realsense -> wrist_3_link/CodexWristCamera
+
+Robot base Rz(180) synchronization:
+
+- Currently active in:
+
+  /data/user/isaacsim6/Project/icp_verify/collect_sim_target_pointclouds.py
+  /data/user/isaacsim6/outputs/baselines/broken_precreated_peg_attempt_20260709/scense_collect_cube_pick_place_embody_tag.py
+
+- The cube pick-place script currently stores the selected-frame ICP refined pose as DESIRED_BASE_POSES, with this semantic:
+
+  DESIRED_BASE_POSES = world_T_align_real_base_frame
+
+  and then internally composes:
+
+  world_T_isaac_base_link = world_T_align_real_base_frame @ align_real_base_frame_T_isaac_base_link
+
+- Still check before assuming the same base correction is active in:
+
+  /data/user/isaacsim6/outputs/baselines/broken_precreated_peg_attempt_20260709/scense_collect_fix_grip_random_hole_in_2cm_range_align_real_three_cam_wrist3_handeye_optical_down.py
+
+If peg-in-hole should use the same real-base-aligned robot orientation, update its robot placement logic so DESIRED_BASE_POSES is interpreted as world_T_align_real_base_frame and the inserted Isaac base_link receives the composed Rz(180) pose.
+
+12. Common Failure Modes and Checks
+-----------------------------------
+
+0. RealSense depth noise causes per-frame ICP deltas to scatter:
+   - Complex background depth can look reasonable in RGB but produce noisy point clouds.
+   - Check real/sim point cloud overlays before trusting ICP.
+   - If per-frame independent deltas vary by many centimeters or many degrees while overlays look similar, ICP is likely drifting on weak geometry/noise.
+   - Select only low-noise frames and use shared-delta per-frame ICP.
+   - Prefer tabletop plus table edges for future calibration captures.
+
+
+1. RGB sim and real look at completely different places:
+   - Check whether the wrist camera USD pose uses Isaac -Z convention.
+   - Check that camera is under wrist_3_link, not ft_frame.
+   - Check that align_real_base_frame_T_isaac_base_link = Rz(180) is applied to sim robot base when using real UR joints.
+   - Check joint order.
+
+2. Many sim depth point clouds have zero points:
+   - Camera optical direction is likely wrong.
+   - Depth max may be too small, but if most frames are zero it is usually a camera pose issue.
+
+3. IK from real TCP differs by about 180 degrees:
+   - Check whether comparing real UR base frame to Isaac base_link without Rz(180).
+
+4. ICP result dominated by gripper/camera:
+   - Verify hand-eye first with RGB.
+   - Use multiple frames and per-frame shared-delta ICP.
+   - Avoid merging all frames before correspondence if per-frame pairing is known.
+
+5. Table or background confusion:
+   - The visible background is from aligned 3DGS.
+   - Collision planes used for physics do not automatically appear as camera-visible point clouds unless rendered geometry exists.
+   - If the table is only a collision plane and not visible geometry, it will not contribute normal RGB/depth appearance the same way as the 3DGS/table visual asset.
+
+13. Current Backups
+-------------------
+
+Robot USD backups created during camera pose debugging include:
+
+  /data/user/isaacsim6/assets/ur5e_robotiq_2f85_fixed_camera_gripper_camera_rz90_wrist3_handeye_optical_down_camera.usda.bak_before_wrist3_z180_20260816
+  /data/user/isaacsim6/assets/ur5e_robotiq_2f85_fixed_camera_gripper_camera_rz90_wrist3_handeye_optical_down_camera.usda.bak_before_wrist3_pose_rz180_matrix_20260816
+  /data/user/isaacsim6/assets/ur5e_robotiq_2f85_fixed_camera_gripper_camera_rz90_wrist3_handeye_optical_down_camera.usda.bak_before_revert_wrist_camera_no_z180_20260816
+  /data/user/isaacsim6/assets/ur5e_robotiq_2f85_fixed_camera_gripper_camera_rz90_wrist3_handeye_optical_down_camera.usda.bak_before_isaac_zminus_handeye_20260816
+
+14. Minimal Validation Checklist
+--------------------------------
+
+Before running ICP:
+
+1. Open sample_*/rgb_sim.png and compare to real rgb.png for the same sample.
+2. Confirm all sim samples produce nonzero depth points.
+3. Confirm sim camera path is:
+
+   wrist_3_link/CodexWristCamera
+
+4. Confirm the USD source camera is:
+
+   wrist_3_link/realsense
+
+5. Confirm target metadata records align_real_base_frame enabled.
+6. Confirm gripper command matches the intended real capture state.
+7. Confirm real joint_position_rad order matches UR arm joint order.
+8. Confirm base_T_tcp frame semantics before using it in ICP.
+
+15. External References
+-----------------------
+
+User referenced ArUco/AprilTag based 3DGS alignment project:
+
+  https://github.com/LezhiLiao/apriltag-3dgs-align
+
+AprilTag coordinate convention reference:
+
+  https://github.com/AprilRobotics/apriltag
+
+AprilTag documentation states the camera-centered tag pose convention with camera z-axis pointing out through the lens, image x right, image y down. This is the OpenCV-style optical convention and must be converted before writing to an Isaac/USD Camera prim, whose camera looks along local -Z.

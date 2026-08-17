@@ -1,0 +1,35 @@
+{
+  "workspace": "/data/user/isaacsim6/Project/icp_verify",
+  "real_run_dir": "/data/user/isaacsim6/Project/icp_verify/data/icp_run_20260814_155745",
+  "scene_usd": "/data/user/isaacsim6/assets/810_data/usd-result/embody_tag.usda",
+  "robot_usd": "/data/user/isaacsim6/assets/ur5e_robotiq_2f85_fixed_camera_gripper_camera_rz90_wrist3_handeye_optical_down_camera.usda",
+  "cube_collect_script": "/data/user/isaacsim6/outputs/baselines/broken_precreated_peg_attempt_20260709/scense_collect_cube_pick_place_embody_tag.py",
+  "peg_collect_script": "/data/user/isaacsim6/outputs/baselines/broken_precreated_peg_attempt_20260709/scense_collect_fix_grip_random_hole_in_2cm_range_align_real_three_cam_wrist3_handeye_optical_down.py",
+  "sim_target_dir": "/tmp/isaacsim6_outputs/sim_icp_target_pointclouds_align_base_isaac_zminus_handeye_20260816",
+  "selected_icp_frames": [
+    "sample_000010",
+    "sample_000009",
+    "sample_000008",
+    "sample_000006",
+    "sample_000000"
+  ],
+  "align_real_base_frame_T_isaac_base_link_quat_wxyz": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+  ],
+  "current_cube_world_T_align_real_base_frame": {
+    "translation": [
+      -0.6062680991476823,
+      -0.7083919554004651,
+      0.1128684852177913
+    ],
+    "quat_wxyz": [
+      0.9993668817805874,
+      -0.02892215679558249,
+      0.015075419773920105,
+      -0.01421534962909488
+    ]
+  }
+}
